@@ -12,6 +12,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,7 +27,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
-// 🔹 Data model
 data class RecoverableFile(
     val name: String,
     val uri: Uri,
@@ -41,12 +43,16 @@ fun ScanScreen(selectedCategory: String) {
     var loading by remember { mutableStateOf(false) }
     val recoveredFiles = remember { mutableStateListOf<Uri>() }
 
-    // 🔹 Preview image functionality
     var previewUri by remember { mutableStateOf<Uri?>(null) }
 
     Box(modifier = Modifier.fillMaxSize()) {
 
-        Column(modifier = Modifier.fillMaxSize().padding(bottom = 100.dp)) {
+        // 🔹 Main UI
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = 100.dp)
+        ) {
 
             if (loading) {
                 CircularProgressIndicator(modifier = Modifier.padding(10.dp))
@@ -56,45 +62,51 @@ fun ScanScreen(selectedCategory: String) {
                 items(files) { file ->
                     val isRecovered = recoveredFiles.contains(file.uri)
                     FileItemPreview(file, isRecovered) {
-                        previewUri = file.uri // show preview when clicked
+                        previewUri = file.uri
                     }
                 }
             }
         }
 
-        // 🔹 Start Scan button
-        Button(
-            onClick = {
-                loading = true
-                CoroutineScope(Dispatchers.IO).launch {
-                    val result = scanDeletedTraces(context)
-                        .filter { it.category.equals(selectedCategory, true) }
-                        .sortedBy { it.lastModified }
+        // 🔥 Round Image Scan Button
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(16.dp)
+                .size(80.dp)
+                .clickable {
+                    loading = true
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val result = scanDeletedTraces(context)
+                            .filter { it.category.equals(selectedCategory, true) }
+                            .sortedBy { it.lastModified }
 
-                    withContext(Dispatchers.Main) {
-                        files = result
-                        loading = false
-                        previewUri = result.firstOrNull()?.uri
+                        withContext(Dispatchers.Main) {
+                            files = result
+                            loading = false
+                            previewUri = null
+                        }
                     }
                 }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-                .align(Alignment.BottomCenter)
         ) {
-            Text("Start Scan")
+            Image(
+                painter = painterResource(id = R.drawable.scan_button),
+                contentDescription = "Start Scan",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+            )
         }
     }
 
-    // 🔹 Preview dialog
+    // 🔹 Preview Dialog
     previewUri?.let { uri ->
         AlertDialog(
             onDismissRequest = { previewUri = null },
             text = {
                 val bitmap = remember(uri) {
-                    context.contentResolver.openInputStream(uri)?.use { stream ->
-                        BitmapFactory.decodeStream(stream)
+                    context.contentResolver.openInputStream(uri)?.use {
+                        BitmapFactory.decodeStream(it)
                     }
                 }
                 bitmap?.let {
@@ -113,22 +125,31 @@ fun ScanScreen(selectedCategory: String) {
                     if (file != null) {
                         recoverFile(context, file)
                         recoveredFiles.add(uri)
+
+                        android.widget.Toast.makeText(
+                            context,
+                            "Saved to: Pictures/GhostRecovery/Recovered/${file.name}",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
                     }
                     previewUri = null
                 }) {
-                    Text("Recover / Close")
+                    Text("Recover")
                 }
             }
+
+
         )
     }
 }
 
-// 🔍 Scan MediaStore + hidden folders
+// 🔍 Scan logic
 fun scanDeletedTraces(context: Context): List<RecoverableFile> {
+
     val list = mutableListOf<RecoverableFile>()
 
-    // 1️⃣ MediaStore images
     val mediaCollection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+
     val projection = arrayOf(
         MediaStore.Images.Media.DISPLAY_NAME,
         MediaStore.Images.Media.SIZE,
@@ -137,16 +158,19 @@ fun scanDeletedTraces(context: Context): List<RecoverableFile> {
     )
 
     context.contentResolver.query(mediaCollection, projection, null, null, null)?.use { cursor ->
+
         val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
         val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
         val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
         val pathCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
 
         while (cursor.moveToNext()) {
+
             val name = cursor.getString(nameCol)
             val size = cursor.getLong(sizeCol)
             val id = cursor.getLong(idCol)
             val path = cursor.getString(pathCol)
+
             val uri = ContentUris.withAppendedId(mediaCollection, id)
 
             val category = when {
@@ -164,7 +188,6 @@ fun scanDeletedTraces(context: Context): List<RecoverableFile> {
         }
     }
 
-    // 2️⃣ Hidden folders + deleted traces
     val folders = listOf(
         "${Environment.getExternalStorageDirectory().path}/DCIM/.thumbnails",
         "${Environment.getExternalStorageDirectory().path}/Pictures",
@@ -174,6 +197,7 @@ fun scanDeletedTraces(context: Context): List<RecoverableFile> {
 
     folders.forEach { path ->
         val folder = File(path)
+
         folder.listFiles()?.forEach { f ->
             if (f.isFile && list.none { it.name == f.name }) {
 
@@ -231,20 +255,28 @@ fun recoverFile(context: Context, file: RecoverableFile) {
     }
 }
 
-// 🖼 File item UI with preview
+// 🖼 File UI
 @Composable
-fun FileItemPreview(file: RecoverableFile, isRecovered: Boolean, onClick: () -> Unit) {
+fun FileItemPreview(
+    file: RecoverableFile,
+    isRecovered: Boolean,
+    onClick: () -> Unit
+) {
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(8.dp)
             .clickable(enabled = !isRecovered) { onClick() }
     ) {
+
         Column(modifier = Modifier.padding(10.dp)) {
+
             val context = LocalContext.current
+
             val bitmap = remember(file.uri) {
-                context.contentResolver.openInputStream(file.uri)?.use { stream ->
-                    BitmapFactory.decodeStream(stream)
+                context.contentResolver.openInputStream(file.uri)?.use {
+                    BitmapFactory.decodeStream(it)
                 }
             }
 
@@ -260,15 +292,20 @@ fun FileItemPreview(file: RecoverableFile, isRecovered: Boolean, onClick: () -> 
 
             Spacer(modifier = Modifier.height(5.dp))
 
-            Text(text = file.name, style = MaterialTheme.typography.bodyLarge)
-            Text(text = "Size: ${file.size / 1024} KB", style = MaterialTheme.typography.bodySmall)
+            Text(file.name)
+            Text("Size: ${file.size / 1024} KB")
             Text(
-                text = "Date: ${SimpleDateFormat("dd/MM/yyyy HH:mm").format(Date(file.lastModified))}",
-                style = MaterialTheme.typography.bodySmall
+                "Date: ${
+                    SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+                        .format(Date(file.lastModified))
+                }"
             )
-            Text(text = "Recovery: ${file.recoveryChance}", style = MaterialTheme.typography.bodySmall)
-            Text(text = "Category: ${file.category}", style = MaterialTheme.typography.bodySmall)
-            if (isRecovered) Text(text = "✅ Recovered", style = MaterialTheme.typography.bodySmall)
+            Text("Recovery: ${file.recoveryChance}")
+            Text("Category: ${file.category}")
+
+            if (isRecovered) {
+                Text("✅ Recovered")
+            }
         }
     }
 }
